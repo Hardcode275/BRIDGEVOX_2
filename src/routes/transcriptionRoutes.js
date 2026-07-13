@@ -2,13 +2,21 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { transcribeFileHandler } = require('../controllers/transcriptionController');
+const path = require('path');
+const fs = require('fs');
 
-// Configuración de multer para almacenar en memoria (Buffer)
-// Limitamos el tamaño del archivo a 15MB para evitar sobrecarga
+// Crear la carpeta uploads si no existe
+const uploadDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configuración de multer para almacenar temporalmente en disco
+// Aumentamos el límite a 2GB para archivos de audio gigantes
 const upload = multer({
-  storage: multer.memoryStorage(),
+  dest: uploadDir,
   limits: {
-    fileSize: 15 * 1024 * 1024 // 15MB
+    fileSize: 2 * 1024 * 1024 * 1024 // 2GB
   }
 });
 

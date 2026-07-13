@@ -49,9 +49,14 @@ app.get(/.*/, (req, res) => {
 registerSocketHandlers(io);
 
 // Iniciar el servidor
-server.listen(port, () => {
+const serverInstance = server.listen(port, () => {
   console.log(`\n===============================================================`);
   console.log(`🚀 Servidor BridgeVox_2 listo y escuchando en el puerto ${port}`);
   console.log(`💻 Ctrl + Clic para abrir en Chrome: http://localhost:${port}`);
   console.log(`===============================================================\n`);
 });
+
+// Aumentar los timeouts del servidor HTTP a 15 minutos (900000 ms) para soportar subidas de archivos gigantes
+serverInstance.timeout = 15 * 60 * 1000;
+serverInstance.keepAliveTimeout = 15 * 60 * 1000;
+serverInstance.headersTimeout = 15 * 60 * 1000 + 1000;

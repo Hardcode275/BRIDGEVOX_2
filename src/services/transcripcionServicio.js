@@ -90,14 +90,14 @@ function updateContextBuffer(currentBuffer, newText) {
   return wordStart !== -1 ? trimmed.slice(wordStart + 1) : trimmed;
 }
 
-async function transcribeAudioFile(fileBuffer, mimeType, options = {}) {
+async function transcribeAudioFile(fileSource, mimeType, options = {}) {
   const deepgram = getClient();
   
-  // 1. Normalizar tipos MIME
+  // Normalizar tipos MIME no estándar para asegurar compatibilidad con Deepgram
   let normalizedMimeType = mimeType;
   if (mimeType) {
     const mimeLower = mimeType.toLowerCase();
-    if (mimeLower === 'audio/x-m4a' || mimeLower === 'audio/m4a' || mimeLower === 'video/mp4') {
+    if (mimeLower === 'audio/x-m4a' || mimeLower === 'audio/m4a') {
       normalizedMimeType = 'audio/x-m4a';
     } else if (mimeLower === 'audio/x-wav') {
       normalizedMimeType = 'audio/wav';
@@ -106,16 +106,19 @@ async function transcribeAudioFile(fileBuffer, mimeType, options = {}) {
     }
   }
 
-  // 2. PASAR EL BUFFER DIRECTAMENTE COMO PRIMER PARÁMETRO
-  // El SDK v5 maneja de forma mucho más estable el archivo binario directo 
-  // cuando el mimetype se inyecta en el objeto de configuración.
+  // Extraer contentLength de las opciones para evitar enviarlo como parámetro de consulta a la API
+  const { contentLength, ...deepgramOptions } = options;
+
   const response = await deepgram.listen.v1.media.transcribeFile(
-    fileBuffer, // Mandamos el buffer en crudo como primer argumento
+    {
+      data: fileSource,
+      contentType: normalizedMimeType,
+      contentLength: contentLength,
+    },
     {
       model: 'nova-2',
       smart_format: true,
-      mimetype: normalizedMimeType, // Inyectamos el mimetype dentro de las opciones
-      ...options,
+      ...deepgramOptions,
     }
   );
   

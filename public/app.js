@@ -133,9 +133,9 @@ function handleAudioFile(file) {
     return;
   }
 
-  const maxSize = 15 * 1024 * 1024; // 15MB
+  const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
   if (file.size > maxSize) {
-    showNotification('El archivo excede el tamaño límite de 15MB.', 'danger');
+    showNotification('El archivo excede el tamaño límite de 2GB.', 'danger');
     return;
   }
 
