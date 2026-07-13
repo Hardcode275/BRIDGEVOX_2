@@ -1,4 +1,22 @@
 require('dotenv').config();
+const { setGlobalDispatcher, Agent } = require('undici');
+
+// Configurar el agente global de undici con un timeout de 15 minutos para evitar que fetch aborte peticiones de Deepgram
+setGlobalDispatcher(new Agent({
+  bodyTimeout: 15 * 60 * 1000,     // 15 minutos
+  headersTimeout: 15 * 60 * 1000,  // 15 minutos
+  connectTimeout: 60 * 1000,       // 1 minuto para conexión
+}));
+
+// Evitar caídas del servidor por excepciones no controladas o promesas rechazadas
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Backend] Rechazo de Promesa no controlado en:', promise, 'razón:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[Backend] Excepción no controlada:', error);
+});
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -47,6 +65,36 @@ app.get(/.*/, (req, res) => {
 
 // Configurar los manejadores de WebSockets para transcripción en tiempo real
 registerSocketHandlers(io);
+
+// Middleware global para manejo de errores (captura errores de multer, abortos, etc.)
+app.use((err, req, res, next) => {
+  console.error('[Backend] Error detectado por el middleware global:', err.message || err);
+  
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  // Manejar específicamente cancelaciones de subida de archivos (Request aborted de multer)
+  const errMsg = err.message || '';
+  if (errMsg.toLowerCase().includes('aborted')) {
+    return res.status(499).json({
+      error: 'La conexión fue cancelada o abortada por el cliente.',
+      details: err.message
+    });
+  }
+
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      error: 'El archivo excede el límite de tamaño permitido.',
+      details: err.message
+    });
+  }
+
+  res.status(err.status || err.statusCode || 500).json({
+    error: 'Error interno del servidor al procesar la solicitud.',
+    details: err.message || err
+  });
+});
 
 // Iniciar el servidor
 const serverInstance = server.listen(port, () => {

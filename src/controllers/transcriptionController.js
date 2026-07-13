@@ -22,11 +22,11 @@ async function transcribeFileHandler(req, res) {
 
     console.log(`[Backend] Transcribiendo archivo: ${originalName} (${mimeType}), tamaño: ${fileSize} bytes, idioma: ${language}`);
 
-    // Crear un stream de lectura del archivo temporal
-    const fileSource = fs.createReadStream(tempFilePath);
+    // Leer el archivo en memoria como Buffer para evitar problemas de stream abortado en fetch/undici
+    const fileBuffer = fs.readFileSync(tempFilePath);
 
     // Llamar al servicio de transcripción de Deepgram
-    const result = await transcribeAudioFile(fileSource, mimeType, { 
+    const result = await transcribeAudioFile(fileBuffer, mimeType, { 
       language,
       contentLength: fileSize 
     });
