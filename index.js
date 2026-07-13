@@ -58,5 +58,6 @@ const serverInstance = server.listen(port, () => {
 
 // Aumentar los timeouts del servidor HTTP a 15 minutos (900000 ms) para soportar subidas de archivos gigantes
 serverInstance.timeout = 15 * 60 * 1000;
+serverInstance.requestTimeout = 15 * 60 * 1000; // Evita que Node.js aborte subidas lentas después de 5 minutos
 serverInstance.keepAliveTimeout = 15 * 60 * 1000;
 serverInstance.headersTimeout = 15 * 60 * 1000 + 1000;
