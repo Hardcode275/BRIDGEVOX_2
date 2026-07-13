@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BridgeVox 2 | Transcripción de Audio a Word</title>
+  <!-- Google Fonts: Outfit (headings) & Inter (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Background Glows -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">
+          <i class="fa-solid fa-file-word"></i>
+          <span class="pulse-ring"></span>
+        </div>
+        <h1>Bridge<span>Vox</span> <small>2.0</small></h1>
+      </div>
+      <p class="subtitle">Sube tu audio y descárgalo convertido a un documento de Microsoft Word (.docx)</p>
+      
+      <!-- API Status Indicators -->
+      <div class="status-panel">
+        <span class="status-badge" id="backend-status">
+          <span class="dot yellow"></span> Servidor: Conectando...
+        </span>
+      </div>
+    </header>
+
+    <!-- Main Grid Dashboard -->
+    <main class="dashboard-grid">
+      
+      <!-- Control Panel & Input -->
+      <section class="panel glass-panel input-panel">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-file-audio"></i> 1. Cargar Audio</h2>
+        </div>
+
+        <!-- Options Container -->
+        <div class="options-container">
+          <h3><i class="fa-solid fa-sliders"></i> Ajustes del Documento</h3>
+          <div class="option-grid">
+            <div class="option-item">
+              <label for="language-select">Idioma de Audio</label>
+              <div class="select-wrapper">
+                <select id="language-select">
+                  <option value="es" selected>Español (es)</option>
+                  <option value="en">Inglés (en)</option>
+                  <option value="fr">Francés (fr)</option>
+                  <option value="de">Alemán (de)</option>
+                  <option value="it">Italiano (it)</option>
+                  <option value="pt">Portugués (pt)</option>
+                </select>
+                <i class="fa-solid fa-chevron-down"></i>
+              </div>
+            </div>
+            
+            <div class="option-item">
+              <label for="target-language-select">Idioma de Traducción</label>
+              <div class="select-wrapper">
+                <select id="target-language-select" disabled>
+                  <option value="en" selected>Inglés (en)</option>
+                  <option value="es">Español (es)</option>
+                  <option value="fr">Francés (fr)</option>
+                  <option value="de">Alemán (de)</option>
+                  <option value="it">Italiano (it)</option>
+                  <option value="pt">Portugués (pt)</option>
+                </select>
+                <i class="fa-solid fa-chevron-down"></i>
+              </div>
+            </div>
+          </div>
+
+          <div class="toggle-container">
+            <label class="switch">
+              <input type="checkbox" id="translate-toggle" onchange="toggleTranslationOption()">
+              <span class="slider round"></span>
+            </label>
+            <span class="toggle-label">Traducir e incluir en el Word</span>
+          </div>
+        </div>
+
+        <!-- File Upload Section -->
+        <div class="upload-section">
+          <div class="upload-zone" id="drop-zone">
+            <input type="file" id="audio-file-input" accept="audio/*" style="display: none;">
+            <div class="upload-icon">
+              <i class="fa-solid fa-cloud-arrow-up"></i>
+            </div>
+            <p class="upload-prompt">Arrastra tu archivo aquí o <span>haz clic para explorar</span></p>
+            <p class="upload-specs">Formatos: MP3, WAV, M4A, WEBM, FLAC (Máx. 15MB)</p>
+          </div>
+
+          <div class="selected-file-panel" id="file-info-panel" style="display: none;">
+            <div class="file-details">
+              <i class="fa-solid fa-file-audio"></i>
+              <div class="file-text">
+                <span class="file-name" id="selected-file-name">audio.mp3</span>
+                <span class="file-size" id="selected-file-size">0.0 MB</span>
+              </div>
+              <button class="remove-file-btn" id="clear-file-btn" title="Quitar archivo">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            
+            <div class="audio-player-wrapper" id="audio-preview-container" style="display: none;">
+              <audio id="audio-preview" controls></audio>
+            </div>
+
+            <button class="action-btn" id="transcribe-btn">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> Convertir a Word (.docx)
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Output / Download Word Panel -->
+      <section class="panel glass-panel output-panel">
+        <div class="panel-header">
+          <h2><i class="fa-solid fa-file-invoice"></i> 2. Documento Generado</h2>
+        </div>
+
+        <!-- Spinner loader overlay -->
+        <div class="loading-overlay" id="loading-overlay" style="display: none;">
+          <div class="loader-content">
+            <div class="spinner"></div>
+            <p id="loader-message">Procesando audio y maquetando Word...</p>
+          </div>
+        </div>
+
+        <!-- Document Result View -->
+        <div class="document-result-view" id="document-result-view">
+          
+          <!-- Empty State (Initial) -->
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">
+              <i class="fa-solid fa-file-word"></i>
+            </div>
+            <h3>Esperando archivo de audio</h3>
+            <p>Carga un archivo de audio en la sección izquierda y presiona "Convertir a Word" para procesar la transcripción y generar la descarga.</p>
+          </div>
+
+          <!-- Success Download State (Hidden Initially) -->
+          <div class="success-download-state" id="success-download-state" style="display: none;">
+            <div class="success-header">
+              <div class="success-checkmark-icon">
+                <i class="fa-solid fa-circle-check"></i>
+              </div>
+              <h3>¡Transcripción Completada!</h3>
+              <p>Tu archivo de Microsoft Word ha sido creado con formato profesional.</p>
+            </div>
+
+            <!-- Big Word Document Card -->
+            <div class="word-doc-card">
+              <div class="word-icon-area">
+                <i class="fa-solid fa-file-word"></i>
+              </div>
+              <div class="word-info-area">
+                <h4 id="docx-file-title">transcripcion_audio.docx</h4>
+                <p id="docx-file-meta">Listo para descargar • Formato Word (.docx)</p>
+              </div>
+            </div>
+
+            <!-- Detail list -->
+            <div class="details-list-box">
+              <h5>Detalles del Procesamiento</h5>
+              <ul class="details-list">
+                <li><span>Nombre Original:</span> <strong id="detail-orig-name">-</strong></li>
+                <li><span>Duración de Audio:</span> <strong id="detail-duration">-</strong></li>
+                <li><span>Idioma de Origen:</span> <strong id="detail-lang">-</strong></li>
+                <li><span>Traducción Incluida:</span> <strong id="detail-translated">No</strong></li>
+              </ul>
+            </div>
+
+            <!-- Download Action Buttons -->
+            <div class="download-actions-group">
+              <button class="action-btn download-docx-btn" id="download-docx-btn">
+                <i class="fa-solid fa-circle-down"></i> Descargar Documento Word (.docx)
+              </button>
+              <button class="reset-btn" id="new-transcribe-btn">
+                <i class="fa-solid fa-rotate-left"></i> Transcribir otro archivo
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>© 2026 BridgeVox 2. Todos los derechos reservados. Desarrollado con Node.js, Deepgram Nova-2 y OpenAI GPT.</p>
+    </footer>
+  </div>
+
+  <!-- Frontend Javascript logic -->
+  <script src="app.js"></script>
+</body>
+</html>
