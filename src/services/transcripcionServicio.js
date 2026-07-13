@@ -3,7 +3,10 @@ const { DeepgramClient } = require('@deepgram/sdk');
 let _deepgram = null;
 function getClient() {
   if (!_deepgram) {
-    _deepgram = new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY });
+    _deepgram = new DeepgramClient({ 
+      apiKey: process.env.DEEPGRAM_API_KEY,
+      timeoutInSeconds: 900 // 15 minutos global para soportar audios pesados
+    });
   }
   return _deepgram;
 }
@@ -119,6 +122,9 @@ async function transcribeAudioFile(fileSource, mimeType, options = {}) {
       model: 'nova-2',
       smart_format: true,
       ...deepgramOptions,
+    },
+    {
+      timeoutInSeconds: 900 // 15 minutos límite para esta petición específica
     }
   );
   
