@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { transcribeFileHandler } = require('../controllers/transcriptionController');
+const { 
+  transcribeFileHandler,
+  getJobStatusHandler,
+  downloadJobDocxHandler
+} = require('../controllers/transcriptionController');
 const path = require('path');
 const fs = require('fs');
 
@@ -20,7 +24,13 @@ const upload = multer({
   }
 });
 
-// Ruta para subir un audio y obtener la transcripción
+// Ruta para subir un audio e iniciar el trabajo de transcripción en segundo plano
 router.post('/transcribe', upload.single('audio'), transcribeFileHandler);
+
+// Ruta para obtener el progreso y estado actual de la tarea
+router.get('/transcribe/status/:jobId', getJobStatusHandler);
+
+// Ruta para descargar el Word generado de forma directa
+router.get('/transcribe/download/:jobId', downloadJobDocxHandler);
 
 module.exports = router;

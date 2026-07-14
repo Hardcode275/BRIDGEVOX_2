@@ -3,99 +3,216 @@ const { transcribeAudioFile } = require('../services/transcripcionServicio');
 const { translate, shouldTranslate } = require('../services/translationService');
 const { generateDocxBuffer } = require('../services/docxService');
 
-async function transcribeFileHandler(req, res) {
-  let tempFilePath = null;
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No se ha subido ningún archivo de audio.' });
+// Almacén de trabajos en memoria
+const jobs = new Map();
+
+// Ejecutar limpieza periódica cada 10 minutos para liberar memoria de archivos/trabajos antiguos (más de 1 hora)
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of jobs.entries()) {
+    if (now - job.createdAt > 60 * 60 * 1000) { // 1 hora de antigüedad
+      if (job.tempFilePath && fs.existsSync(job.tempFilePath)) {
+        try {
+          fs.unlinkSync(job.tempFilePath);
+          console.log(`[Backend] Archivo temporal eliminado para trabajo antiguo: ${job.tempFilePath}`);
+        } catch (err) {
+          console.error(`[Backend] Error al eliminar archivo temporal de trabajo antiguo: ${err.message}`);
+        }
+      }
+      jobs.delete(jobId);
+      console.log(`[Backend] Trabajo ${jobId} eliminado de la memoria por antigüedad.`);
     }
+  }
+}, 10 * 60 * 1000);
 
-    tempFilePath = req.file.path;
-    const mimeType = req.file.mimetype;
-    const originalName = req.file.originalname;
-    const fileSize = req.file.size;
-    
-    // Obtener parámetros de idioma si se envían
-    const language = req.body.language || 'es'; // Por defecto español
-    const targetLanguage = req.body.targetLanguage || 'en'; // Traducir al inglés por defecto si se solicita
-    const translateEnabled = req.body.translate === 'true';
+/**
+ * Inicia la tarea de transcripción en segundo plano y actualiza el estado del trabajo
+ */
+async function processJobInBackground(jobId, mimeType) {
+  const job = jobs.get(jobId);
+  if (!job) return;
 
-    console.log(`[Backend] Transcribiendo archivo: ${originalName} (${mimeType}), tamaño: ${fileSize} bytes, idioma: ${language}`);
+  try {
+    // 1. Transcripción con Deepgram
+    job.status = 'transcribing';
+    job.progress = 20;
+    console.log(`[Backend] [Trabajo ${jobId}] Iniciando transcripción de Deepgram...`);
 
-    // Leer el archivo en memoria como Buffer para evitar problemas de stream abortado en fetch/undici
-    const fileBuffer = fs.readFileSync(tempFilePath);
-
-    // Llamar al servicio de transcripción de Deepgram
+    const fileBuffer = fs.readFileSync(job.tempFilePath);
     const result = await transcribeAudioFile(fileBuffer, mimeType, { 
-      language,
-      contentLength: fileSize 
+      language: job.language,
+      contentLength: job.fileSize 
     });
-    
-    // Extraer el texto transcrito (soporta SDK v5 y anteriores)
+
     const dataObj = result?.data || result;
     const transcript = dataObj?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
     const duration = dataObj?.metadata?.duration || 0;
 
     if (!transcript) {
-      return res.status(422).json({
-        error: 'No se detectó voz o contenido legible en el audio para transcribir.'
-      });
+      throw new Error('No se detectó voz o contenido legible en el audio para transcribir.');
     }
 
+    // 2. Traducción si está activada
     let translation = '';
-    if (translateEnabled && shouldTranslate(transcript)) {
+    if (job.translateEnabled && shouldTranslate(transcript)) {
+      job.status = 'translating';
+      job.progress = 60;
+      console.log(`[Backend] [Trabajo ${jobId}] Transcripción lista. Traduciendo transcripción con OpenAI...`);
       try {
-        translation = await translate(transcript, language, targetLanguage, '', 'HTTP_REQ');
+        translation = await translate(transcript, job.language, job.targetLanguage, '', 'HTTP_REQ');
       } catch (err) {
-        console.error('[Backend] Error al traducir:', err.message);
-        // Continuamos incluso si falla la traducción, el reporte tendrá la transcripción original
+        console.error(`[Backend] [Trabajo ${jobId}] Error al traducir:`, err.message);
+        // Continuamos incluso si falla la traducción
       }
     }
 
-    // Generar el archivo Word (.docx)
-    console.log('[Backend] Generando archivo Word (.docx)...');
+    // 3. Generación del reporte Word
+    job.status = 'generating_report';
+    job.progress = 85;
+    console.log(`[Backend] [Trabajo ${jobId}] Generando archivo Word (.docx)...`);
+
     const docxBuffer = await generateDocxBuffer({
-      filename: originalName,
+      filename: job.originalName,
       duration,
-      language,
+      language: job.language,
       transcript,
       translation,
-      targetLanguage
+      targetLanguage: job.targetLanguage
     });
 
-    // Enviar el archivo Word de vuelta
-    const safeName = originalName.replace(/[^a-zA-Z0-9]/g, '_');
+    const safeName = job.originalName.replace(/[^a-zA-Z0-9]/g, '_');
     const docxFilename = `transcripcion_${safeName}_${Date.now()}.docx`;
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="${docxFilename}"`);
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-    
-    return res.send(docxBuffer);
+    // 4. Trabajo finalizado con éxito
+    job.status = 'completed';
+    job.progress = 100;
+    job.docxBuffer = docxBuffer;
+    job.docxFilename = docxFilename;
+    console.log(`[Backend] [Trabajo ${jobId}] Procesamiento de audio y Word completado con éxito.`);
 
   } catch (error) {
-    console.error('[Backend] Error en el controlador de transcripción:', error);
-    if (res.headersSent) {
-      return;
-    }
-    return res.status(500).json({
-      error: 'Error al procesar la transcripción del audio y generar el archivo Word.',
-      details: error.message
-    });
+    console.error(`[Backend] [Trabajo ${jobId}] Error en procesamiento en segundo plano:`, error);
+    job.status = 'failed';
+    job.error = error.message || 'Error desconocido al procesar el audio.';
   } finally {
     // Eliminar el archivo temporal del disco
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-      fs.unlink(tempFilePath, (err) => {
+    if (job.tempFilePath && fs.existsSync(job.tempFilePath)) {
+      fs.unlink(job.tempFilePath, (err) => {
         if (err) {
-          console.error('[Backend] Error al eliminar el archivo temporal:', err.message);
+          console.error(`[Backend] [Trabajo ${jobId}] Error al eliminar archivo temporal:`, err.message);
         } else {
-          console.log('[Backend] Archivo temporal eliminado con éxito:', tempFilePath);
+          console.log(`[Backend] [Trabajo ${jobId}] Archivo temporal eliminado.`);
         }
       });
     }
   }
 }
 
+/**
+ * Endpoint de subida de archivo que responde de inmediato con el jobId
+ */
+async function transcribeFileHandler(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se ha subido ningún archivo de audio.' });
+    }
+
+    const tempFilePath = req.file.path;
+    const mimeType = req.file.mimetype;
+    const originalName = req.file.originalname;
+    const fileSize = req.file.size;
+    
+    const language = req.body.language || 'es';
+    const targetLanguage = req.body.targetLanguage || 'en';
+    const translateEnabled = req.body.translate === 'true';
+
+    console.log(`[Backend] Archivo recibido para cola de procesamiento: ${originalName} (${mimeType}), tamaño: ${fileSize} bytes`);
+
+    // Crear un ID único para la tarea
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Registrar el estado inicial del trabajo
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'queued',
+      progress: 0,
+      originalName,
+      fileSize,
+      language,
+      targetLanguage,
+      translateEnabled,
+      tempFilePath,
+      createdAt: Date.now(),
+      error: null,
+      docxBuffer: null,
+      docxFilename: null
+    });
+
+    // Lanzar el procesamiento en segundo plano sin esperar (fire-and-forget)
+    processJobInBackground(jobId, mimeType);
+
+    // Responder de inmediato con el identificador del trabajo para que el cliente comience el polling
+    return res.status(202).json({
+      jobId,
+      status: 'queued',
+      message: 'Archivo recibido e ingresado a la cola de procesamiento en segundo plano.'
+    });
+
+  } catch (error) {
+    console.error('[Backend] Error en el controlador de transcripción al iniciar trabajo:', error);
+    return res.status(500).json({
+      error: 'Error al iniciar el procesamiento del archivo de audio.',
+      details: error.message
+    });
+  }
+}
+
+/**
+ * Consulta el estado y progreso actual de una tarea de transcripción
+ */
+function getJobStatusHandler(req, res) {
+  const { jobId } = req.params;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'El trabajo especificado no existe o expiró.' });
+  }
+
+  // Devolver solo los metadatos relevantes de progreso
+  return res.json({
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    originalName: job.originalName,
+    error: job.error,
+    docxFilename: job.docxFilename
+  });
+}
+
+/**
+ * Permite la descarga directa del archivo Word generado si la tarea finalizó con éxito
+ */
+function downloadJobDocxHandler(req, res) {
+  const { jobId } = req.params;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'El trabajo especificado no existe o expiró.' });
+  }
+
+  if (job.status !== 'completed' || !job.docxBuffer) {
+    return res.status(400).json({ error: 'El archivo Word solicitado aún no está listo o falló su generación.' });
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  res.setHeader('Content-Disposition', `attachment; filename="${job.docxFilename}"`);
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+  
+  return res.send(job.docxBuffer);
+}
+
 module.exports = {
-  transcribeFileHandler
+  transcribeFileHandler,
+  getJobStatusHandler,
+  downloadJobDocxHandler
 };

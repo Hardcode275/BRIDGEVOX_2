@@ -7,8 +7,8 @@
 // Variables de estado
 let selectedFile = null;
 let fileDuration = 0; // Duración leída en el cliente
-let downloadedBlob = null; // Almacena el Word descargado para redescargas
 let downloadedFilename = "";
+let currentJobId = null; // ID del trabajo asíncrono actual
 
 // Elementos del DOM
 const el = {
@@ -169,11 +169,11 @@ function clearSelectedFile() {
   el.dropZone.style.display = 'flex';
 }
 
-// Subir y Convertir a Word
+// Subir y Convertir a Word (Inicia el proceso asíncrono)
 async function uploadAndConvert() {
   if (!selectedFile) return;
 
-  showLoader(true, 'Procesando audio e implementando transcripción...');
+  showLoader(true, 'Subiendo archivo de audio al servidor...');
 
   const formData = new FormData();
   formData.append('audio', selectedFile);
@@ -189,65 +189,20 @@ async function uploadAndConvert() {
 
     const contentType = response.headers.get('content-type') || '';
 
-    // Si la respuesta es JSON, es un mensaje de error del backend
     if (contentType.includes('application/json')) {
-      const errData = await response.json();
-      showLoader(false);
-      throw new Error(errData.error || errData.details || 'Error al transcribir el audio.');
-    }
-
-    if (!response.ok) {
-      showLoader(false);
-      throw new Error(`Error en el servidor: ${response.status} ${response.statusText}`);
-    }
-
-    // Recibir el archivo binario (.docx)
-    const blob = await response.blob();
-    downloadedBlob = blob;
-
-    // Obtener el nombre del archivo del header de Content-Disposition
-    const disposition = response.headers.get('Content-Disposition');
-    let filename = `transcripcion_${selectedFile.name.split('.')[0]}_${Date.now()}.docx`;
-    if (disposition && disposition.indexOf('attachment') !== -1) {
-      const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-      const matches = filenameRegex.exec(disposition);
-      if (matches != null && matches[1]) { 
-        filename = matches[1].replace(/['"]/g, '');
+      const data = await response.json();
+      
+      if (!response.ok || data.error) {
+        showLoader(false);
+        throw new Error(data.error || 'Error al iniciar la tarea de transcripción.');
       }
-    }
-    downloadedFilename = filename;
-
-    showLoader(false);
-
-    // Guardar detalles del procesamiento en la UI
-    el.docxFileTitle.innerText = filename;
-    el.detailOrigName.innerText = selectedFile.name;
-    
-    // Formatear duración
-    const minutes = Math.floor(fileDuration / 60);
-    const seconds = Math.round(fileDuration % 60);
-    el.detailDuration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')} (${Math.round(fileDuration)}s)`;
-    
-    // Mostrar idioma legible
-    const langNames = { es: 'Español', en: 'Inglés', fr: 'Francés', de: 'Alemán', it: 'Italiano', pt: 'Portugués' };
-    el.detailLang.innerText = langNames[el.languageSelect.value] || el.languageSelect.value;
-    
-    // Traducción
-    if (el.translateToggle.checked) {
-      const targetLang = langNames[el.targetLanguageSelect.value] || el.targetLanguageSelect.value;
-      el.detailTranslated.innerText = `Sí (al ${targetLang})`;
+      
+      currentJobId = data.jobId;
+      pollJobStatus(data.jobId);
     } else {
-      el.detailTranslated.innerText = 'No';
+      showLoader(false);
+      throw new Error(`Respuesta inesperada del servidor: ${response.status}`);
     }
-
-    // Mostrar el panel de éxito y descarga
-    el.emptyState.style.display = 'none';
-    el.successDownloadState.style.display = 'flex';
-
-    // Disparar descarga automática del Word de inmediato
-    triggerDownload();
-    
-    showNotification('¡Transcripción completada! Archivo Word descargado.', 'success');
 
   } catch (error) {
     showLoader(false);
@@ -256,29 +211,101 @@ async function uploadAndConvert() {
   }
 }
 
-// Disparar descarga de archivo
-function triggerDownload() {
-  if (!downloadedBlob || !downloadedFilename) return;
+// Polling para verificar el estado de la tarea en segundo plano
+async function pollJobStatus(jobId) {
+  const pollInterval = 3000; // Consultar cada 3 segundos
+  
+  const intervalId = setInterval(async () => {
+    try {
+      const response = await fetch(`/api/transcribe/status/${jobId}`);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        clearInterval(intervalId);
+        showLoader(false);
+        throw new Error(errData.error || `Error al consultar estado: ${response.status}`);
+      }
 
-  const url = window.URL.createObjectURL(downloadedBlob);
+      const data = await response.json();
+      
+      if (data.status === 'queued') {
+        showLoader(true, 'En cola de espera para procesamiento...');
+      } else if (data.status === 'transcribing') {
+        showLoader(true, 'Transcribiendo audio con Deepgram Nova-2...');
+      } else if (data.status === 'translating') {
+        showLoader(true, 'Traduciendo texto con OpenAI GPT-4o-mini...');
+      } else if (data.status === 'generating_report') {
+        showLoader(true, 'Estructurando y generando archivo Word (.docx)...');
+      } else if (data.status === 'completed') {
+        clearInterval(intervalId);
+        showLoader(false);
+
+        downloadedFilename = data.docxFilename;
+
+        // Guardar detalles del procesamiento en la UI
+        el.docxFileTitle.innerText = downloadedFilename;
+        el.detailOrigName.innerText = selectedFile.name;
+        
+        // Formatear duración
+        const minutes = Math.floor(fileDuration / 60);
+        const seconds = Math.round(fileDuration % 60);
+        el.detailDuration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')} (${Math.round(fileDuration)}s)`;
+        
+        // Mostrar idioma legible
+        const langNames = { es: 'Español', en: 'Inglés', fr: 'Francés', de: 'Alemán', it: 'Italiano', pt: 'Portugués' };
+        el.detailLang.innerText = langNames[el.languageSelect.value] || el.languageSelect.value;
+        
+        // Traducción
+        if (el.translateToggle.checked) {
+          const targetLang = langNames[el.targetLanguageSelect.value] || el.targetLanguageSelect.value;
+          el.detailTranslated.innerText = `Sí (al ${targetLang})`;
+        } else {
+          el.detailTranslated.innerText = 'No';
+        }
+
+        // Mostrar el panel de éxito y descarga
+        el.emptyState.style.display = 'none';
+        el.successDownloadState.style.display = 'flex';
+
+        // Disparar descarga automática del Word de inmediato
+        triggerDownload();
+        
+        showNotification('¡Transcripción completada! Archivo Word descargado.', 'success');
+
+      } else if (data.status === 'failed') {
+        clearInterval(intervalId);
+        showLoader(false);
+        throw new Error(data.error || 'Ocurrió un error desconocido al procesar el audio en segundo plano.');
+      }
+
+    } catch (error) {
+      clearInterval(intervalId);
+      showLoader(false);
+      console.error('Error durante el polling:', error);
+      showNotification(error.message, 'danger');
+    }
+  }, pollInterval);
+}
+
+// Disparar descarga de archivo utilizando el endpoint de descarga directo
+function triggerDownload() {
+  if (!currentJobId || !downloadedFilename) return;
+
   const a = document.createElement('a');
-  a.href = url;
+  a.href = `/api/transcribe/download/${currentJobId}`;
   a.download = downloadedFilename;
   document.body.appendChild(a);
   a.click();
   
-  // Limpieza de memoria
   setTimeout(() => {
     document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
   }, 100);
 }
 
 // Reiniciar vista
 function resetView() {
   clearSelectedFile();
-  downloadedBlob = null;
   downloadedFilename = "";
+  currentJobId = null;
   
   el.successDownloadState.style.display = 'none';
   el.emptyState.style.display = 'flex';
