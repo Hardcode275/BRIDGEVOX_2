@@ -1,11 +1,36 @@
 const { DeepgramClient } = require('@deepgram/sdk');
 
+// Función de fetch personalizada para evitar errores de Content-Length duplicados en undici
+const customFetch = (url, init) => {
+  if (init && init.headers && init.body) {
+    const isBufferOrString = 
+      Buffer.isBuffer(init.body) || 
+      typeof init.body === 'string' || 
+      init.body instanceof Uint8Array || 
+      init.body instanceof ArrayBuffer;
+
+    if (isBufferOrString) {
+      if (typeof init.headers.delete === 'function') {
+        init.headers.delete('content-length');
+      } else {
+        for (const key of Object.keys(init.headers)) {
+          if (key.toLowerCase() === 'content-length') {
+            delete init.headers[key];
+          }
+        }
+      }
+    }
+  }
+  return fetch(url, init);
+};
+
 let _deepgram = null;
 function getClient() {
   if (!_deepgram) {
     _deepgram = new DeepgramClient({ 
       apiKey: process.env.DEEPGRAM_API_KEY,
-      timeoutInSeconds: 900 // 15 minutos global para soportar audios pesados
+      timeoutInSeconds: 900, // 15 minutos global para soportar audios pesados
+      fetch: customFetch
     });
   }
   return _deepgram;
