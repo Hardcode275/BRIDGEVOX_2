@@ -211,8 +211,48 @@ function downloadJobDocxHandler(req, res) {
   return res.send(job.docxBuffer);
 }
 
+/**
+ * Genera un archivo Word (.docx) a partir de texto crudo enviado en la petición (para grabaciones en vivo)
+ */
+async function generateDocxFromTextHandler(req, res) {
+  try {
+    const { filename, duration, language, transcript, translation, targetLanguage } = req.body;
+
+    if (!transcript) {
+      return res.status(400).json({ error: 'Falta la transcripción para generar el documento.' });
+    }
+
+    console.log(`[Backend] Generando Word desde texto: ${filename || 'Grabación en vivo'}`);
+
+    const docxBuffer = await generateDocxBuffer({
+      filename: filename || 'Grabacion_en_vivo',
+      duration: duration || 0,
+      language: language || 'es',
+      transcript,
+      translation: translation || '',
+      targetLanguage: targetLanguage || 'en'
+    });
+
+    const safeName = (filename || 'Grabación en vivo').replace(/[^a-zA-Z0-9]/g, '_');
+    const docxFilename = `transcripcion_${safeName}_${Date.now()}.docx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${docxFilename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    
+    return res.send(docxBuffer);
+  } catch (error) {
+    console.error('[Backend] Error al generar Word desde texto:', error);
+    return res.status(500).json({
+      error: 'Error al generar el archivo Word.',
+      details: error.message
+    });
+  }
+}
+
 module.exports = {
   transcribeFileHandler,
   getJobStatusHandler,
-  downloadJobDocxHandler
+  downloadJobDocxHandler,
+  generateDocxFromTextHandler
 };

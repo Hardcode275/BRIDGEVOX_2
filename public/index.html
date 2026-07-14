@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BridgeVox 2 | Transcripción de Audio a Word</title>
+  <title>BridgeVox 2 | Transcripción de Audio y Dictado en Vivo</title>
   <!-- Google Fonts: Outfit (headings) & Inter (body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,7 +28,7 @@
         </div>
         <h1>Bridge<span>Vox</span> <small>2.0</small></h1>
       </div>
-      <p class="subtitle">Sube tu audio y descárgalo convertido a un documento de Microsoft Word (.docx)</p>
+      <p class="subtitle">Transcribe archivos de audio o dicta en tiempo real con inteligencia artificial y genera reportes en Word (.docx)</p>
       
       <!-- API Status Indicators -->
       <div class="status-panel">
@@ -44,10 +44,13 @@
       <!-- Control Panel & Input -->
       <section class="panel glass-panel input-panel">
         <div class="panel-header">
-          <h2><i class="fa-solid fa-file-audio"></i> 1. Cargar Audio</h2>
+          <div class="tab-nav">
+            <button class="tab-btn active" id="tab-file"><i class="fa-solid fa-file-audio"></i> Subir Archivo</button>
+            <button class="tab-btn" id="tab-live"><i class="fa-solid fa-microphone-lines"></i> Dictado en Vivo</button>
+          </div>
         </div>
 
-        <!-- Options Container -->
+        <!-- Options Container (Shared) -->
         <div class="options-container">
           <h3><i class="fa-solid fa-sliders"></i> Ajustes del Documento</h3>
           <div class="option-grid">
@@ -87,40 +90,80 @@
               <input type="checkbox" id="translate-toggle" onchange="toggleTranslationOption()">
               <span class="slider round"></span>
             </label>
-            <span class="toggle-label">Traducir e incluir en el Word</span>
+            <span class="toggle-label" id="translate-toggle-label">Traducir e incluir en el Word</span>
           </div>
         </div>
 
-        <!-- File Upload Section -->
-        <div class="upload-section">
-          <div class="upload-zone" id="drop-zone">
-            <input type="file" id="audio-file-input" accept="audio/*" style="display: none;">
-            <div class="upload-icon">
-              <i class="fa-solid fa-cloud-arrow-up"></i>
-            </div>
-            <p class="upload-prompt">Arrastra tu archivo aquí o <span>haz clic para explorar</span></p>
-            <p class="upload-specs">Formatos: MP3, WAV, M4A, WEBM, FLAC (Máx. 15MB)</p>
-          </div>
-
-          <div class="selected-file-panel" id="file-info-panel" style="display: none;">
-            <div class="file-details">
-              <i class="fa-solid fa-file-audio"></i>
-              <div class="file-text">
-                <span class="file-name" id="selected-file-name">audio.mp3</span>
-                <span class="file-size" id="selected-file-size">0.0 MB</span>
+        <!-- Tab Content: File Upload -->
+        <div class="tab-content" id="content-file">
+          <div class="upload-section">
+            <div class="upload-zone" id="drop-zone">
+              <input type="file" id="audio-file-input" accept="audio/*" style="display: none;">
+              <div class="upload-icon">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
               </div>
-              <button class="remove-file-btn" id="clear-file-btn" title="Quitar archivo">
-                <i class="fa-solid fa-xmark"></i>
+              <p class="upload-prompt">Arrastra tu archivo aquí o <span>haz clic para explorar</span></p>
+              <p class="upload-specs">Formatos: MP3, WAV, M4A, WEBM, FLAC (Máx. 2GB)</p>
+            </div>
+
+            <div class="selected-file-panel" id="file-info-panel" style="display: none;">
+              <div class="file-details">
+                <i class="fa-solid fa-file-audio"></i>
+                <div class="file-text">
+                  <span class="file-name" id="selected-file-name">audio.mp3</span>
+                  <span class="file-size" id="selected-file-size">0.0 MB</span>
+                </div>
+                <button class="remove-file-btn" id="clear-file-btn" title="Quitar archivo">
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+              
+              <div class="audio-player-wrapper" id="audio-preview-container" style="display: none;">
+                <audio id="audio-preview" controls></audio>
+              </div>
+
+              <button class="action-btn" id="transcribe-btn">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Convertir a Word (.docx)
               </button>
             </div>
-            
-            <div class="audio-player-wrapper" id="audio-preview-container" style="display: none;">
-              <audio id="audio-preview" controls></audio>
+          </div>
+        </div>
+
+        <!-- Tab Content: Live Recording -->
+        <div class="tab-content" id="content-live" style="display: none;">
+          <div class="live-section">
+            <div class="recorder-panel">
+              <div class="recorder-visualizer">
+                <div class="sound-wave" id="sound-wave">
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                  <span class="bar"></span>
+                </div>
+                <div class="recorder-timer" id="recorder-timer">00:00</div>
+              </div>
+
+              <div class="recorder-controls">
+                <button class="record-btn" id="record-btn" title="Iniciar Grabación">
+                  <i class="fa-solid fa-microphone"></i>
+                </button>
+                <p class="recorder-status" id="recorder-status">Listo para grabar</p>
+              </div>
             </div>
 
-            <button class="action-btn" id="transcribe-btn">
-              <i class="fa-solid fa-wand-magic-sparkles"></i> Convertir a Word (.docx)
-            </button>
+            <!-- Live Actions Button Group -->
+            <div class="live-actions-group" id="live-actions-group" style="display: none;">
+              <button class="action-btn save-live-btn" id="save-live-btn">
+                <i class="fa-solid fa-file-word"></i> Guardar Grabación en Word (.docx)
+              </button>
+              <button class="reset-btn" id="clear-live-btn">
+                <i class="fa-solid fa-trash-can"></i> Limpiar Dictado
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -128,7 +171,7 @@
       <!-- Output / Download Word Panel -->
       <section class="panel glass-panel output-panel">
         <div class="panel-header">
-          <h2><i class="fa-solid fa-file-invoice"></i> 2. Documento Generado</h2>
+          <h2 id="output-header"><i class="fa-solid fa-file-invoice"></i> Resultado del Procesamiento</h2>
         </div>
 
         <!-- Spinner loader overlay -->
@@ -142,55 +185,75 @@
         <!-- Document Result View -->
         <div class="document-result-view" id="document-result-view">
           
-          <!-- Empty State (Initial) -->
-          <div class="empty-state" id="empty-state">
-            <div class="empty-icon">
-              <i class="fa-solid fa-file-word"></i>
-            </div>
-            <h3>Esperando archivo de audio</h3>
-            <p>Carga un archivo de audio en la sección izquierda y presiona "Convertir a Word" para procesar la transcripción y generar la descarga.</p>
-          </div>
-
-          <!-- Success Download State (Hidden Initially) -->
-          <div class="success-download-state" id="success-download-state" style="display: none;">
-            <div class="success-header">
-              <div class="success-checkmark-icon">
-                <i class="fa-solid fa-circle-check"></i>
-              </div>
-              <h3>¡Transcripción Completada!</h3>
-              <p>Tu archivo de Microsoft Word ha sido creado con formato profesional.</p>
-            </div>
-
-            <!-- Big Word Document Card -->
-            <div class="word-doc-card">
-              <div class="word-icon-area">
+          <!-- VISTA DE ARCHIVO (Subir Archivo) -->
+          <div class="result-state" id="state-file-view">
+            <!-- Empty State (Initial) -->
+            <div class="empty-state" id="empty-state">
+              <div class="empty-icon">
                 <i class="fa-solid fa-file-word"></i>
               </div>
-              <div class="word-info-area">
-                <h4 id="docx-file-title">transcripcion_audio.docx</h4>
-                <p id="docx-file-meta">Listo para descargar • Formato Word (.docx)</p>
+              <h3>Esperando archivo de audio</h3>
+              <p>Carga un archivo de audio en la sección izquierda y presiona "Convertir a Word" para procesar la transcripción y generar la descarga.</p>
+            </div>
+
+            <!-- Success Download State (Hidden Initially) -->
+            <div class="success-download-state" id="success-download-state" style="display: none;">
+              <div class="success-header">
+                <div class="success-checkmark-icon">
+                  <i class="fa-solid fa-circle-check"></i>
+                </div>
+                <h3>¡Transcripción Completada!</h3>
+                <p>Tu archivo de Microsoft Word ha sido creado con formato profesional.</p>
+              </div>
+
+              <!-- Big Word Document Card -->
+              <div class="word-doc-card">
+                <div class="word-icon-area">
+                  <i class="fa-solid fa-file-word"></i>
+                </div>
+                <div class="word-info-area">
+                  <h4 id="docx-file-title">transcripcion_audio.docx</h4>
+                  <p id="docx-file-meta">Listo para descargar • Formato Word (.docx)</p>
+                </div>
+              </div>
+
+              <!-- Detail list -->
+              <div class="details-list-box">
+                <h5>Detalles del Procesamiento</h5>
+                <ul class="details-list">
+                  <li><span>Nombre Original:</span> <strong id="detail-orig-name">-</strong></li>
+                  <li><span>Duración de Audio:</span> <strong id="detail-duration">-</strong></li>
+                  <li><span>Idioma de Origen:</span> <strong id="detail-lang">-</strong></li>
+                  <li><span>Traducción Incluida:</span> <strong id="detail-translated">No</strong></li>
+                </ul>
+              </div>
+
+              <!-- Download Action Buttons -->
+              <div class="download-actions-group">
+                <button class="action-btn download-docx-btn" id="download-docx-btn">
+                  <i class="fa-solid fa-circle-down"></i> Descargar Documento Word (.docx)
+                </button>
+                <button class="reset-btn" id="new-transcribe-btn">
+                  <i class="fa-solid fa-rotate-left"></i> Transcribir otro archivo
+                </button>
               </div>
             </div>
+          </div>
 
-            <!-- Detail list -->
-            <div class="details-list-box">
-              <h5>Detalles del Procesamiento</h5>
-              <ul class="details-list">
-                <li><span>Nombre Original:</span> <strong id="detail-orig-name">-</strong></li>
-                <li><span>Duración de Audio:</span> <strong id="detail-duration">-</strong></li>
-                <li><span>Idioma de Origen:</span> <strong id="detail-lang">-</strong></li>
-                <li><span>Traducción Incluida:</span> <strong id="detail-translated">No</strong></li>
-              </ul>
-            </div>
-
-            <!-- Download Action Buttons -->
-            <div class="download-actions-group">
-              <button class="action-btn download-docx-btn" id="download-docx-btn">
-                <i class="fa-solid fa-circle-down"></i> Descargar Documento Word (.docx)
-              </button>
-              <button class="reset-btn" id="new-transcribe-btn">
-                <i class="fa-solid fa-rotate-left"></i> Transcribir otro archivo
-              </button>
+          <!-- VISTA DE DICTADO (Dictado en Vivo) -->
+          <div class="result-state" id="state-live-view" style="display: none;">
+            <div class="live-chat-container">
+              <div class="live-chat-header">
+                <span class="live-indicator"><span class="dot-live"></span> DICTADO EN VIVO</span>
+                <span class="live-counter" id="live-sentence-count">0 oraciones</span>
+              </div>
+              
+              <div class="live-chat-messages" id="live-chat-messages">
+                <div class="live-chat-empty" id="live-chat-empty">
+                  <i class="fa-solid fa-microphone-lines"></i>
+                  <p>Presiona el botón de micrófono a la izquierda y comienza a hablar. El texto aparecerá en tiempo real aquí...</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -205,6 +268,8 @@
     </footer>
   </div>
 
+  <!-- Socket.io client -->
+  <script src="/socket.io/socket.io.js"></script>
   <!-- Frontend Javascript logic -->
   <script src="app.js"></script>
 </body>

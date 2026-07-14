@@ -1,25 +1,49 @@
 /**
  * BridgeVox 2 - Frontend App Logic
- * Gestiona la carga de archivos de audio, envío a la API REST de transcripción,
- * y descarga directa del documento de Microsoft Word (.docx) generado.
+ * Gestiona la carga de archivos, el dictado en tiempo real mediante WebSockets,
+ * y la descarga de documentos de Word (.docx) formateados profesionalmente.
  */
 
-// Variables de estado
+// Variables de estado (Vista de Archivos)
 let selectedFile = null;
 let fileDuration = 0; // Duración leída en el cliente
 let downloadedFilename = "";
 let currentJobId = null; // ID del trabajo asíncrono actual
 
+// Variables de estado (Vista en Vivo - Dictado)
+let socket = null;
+let audioContext = null;
+let mediaStream = null;
+let processorNode = null;
+let isRecording = false;
+let elapsedSeconds = 0;
+let recordingStartTime = 0;
+let timerInterval = null;
+let liveTranscriptCompiled = "";
+let liveTranslationCompiled = "";
+let liveSentenceCount = 0;
+let activeBubbles = new Map(); // sequenceId -> { container, originalText, translatedText }
+
 // Elementos del DOM
 const el = {
   backendStatus: document.getElementById('backend-status'),
   
-  // Configuración
+  // Tabs de navegación
+  tabFile: document.getElementById('tab-file'),
+  tabLive: document.getElementById('tab-live'),
+  contentFile: document.getElementById('content-file'),
+  contentLive: document.getElementById('content-live'),
+  stateFileView: document.getElementById('state-file-view'),
+  stateLiveView: document.getElementById('state-live-view'),
+  outputHeader: document.getElementById('output-header'),
+
+  // Configuración de idiomas
   languageSelect: document.getElementById('language-select'),
   targetLanguageSelect: document.getElementById('target-language-select'),
   translateToggle: document.getElementById('translate-toggle'),
+  translateToggleLabel: document.getElementById('translate-toggle-label'),
   
-  // Carga de archivos
+  // Sección de Archivo
   dropZone: document.getElementById('drop-zone'),
   audioFileInput: document.getElementById('audio-file-input'),
   fileInfoPanel: document.getElementById('file-info-panel'),
@@ -30,14 +54,26 @@ const el = {
   audioPreviewContainer: document.getElementById('audio-preview-container'),
   transcribeBtn: document.getElementById('transcribe-btn'),
   
-  // Vistas del resultado
+  // Elementos del grabador (En vivo)
+  recordBtn: document.getElementById('record-btn'),
+  recorderStatus: document.getElementById('recorder-status'),
+  recorderTimer: document.getElementById('recorder-timer'),
+  soundWave: document.getElementById('sound-wave'),
+  liveActionsGroup: document.getElementById('live-actions-group'),
+  saveLiveBtn: document.getElementById('save-live-btn'),
+  clearLiveBtn: document.getElementById('clear-live-btn'),
+  liveChatMessages: document.getElementById('live-chat-messages'),
+  liveChatEmpty: document.getElementById('live-chat-empty'),
+  liveSentenceCount: document.getElementById('live-sentence-count'),
+
+  // Vistas del resultado / Loader
   documentResultView: document.getElementById('document-result-view'),
   emptyState: document.getElementById('empty-state'),
   successDownloadState: document.getElementById('success-download-state'),
   loadingOverlay: document.getElementById('loading-overlay'),
   loaderMessage: document.getElementById('loader-message'),
   
-  // Detalles del reporte Word
+  // Detalles del reporte Word (Vista de Archivo)
   docxFileTitle: document.getElementById('docx-file-title'),
   detailOrigName: document.getElementById('detail-orig-name'),
   detailDuration: document.getElementById('detail-duration'),
@@ -67,9 +103,34 @@ function checkBackendStatus() {
     });
 }
 
-// Configurar los listeners
+// Configurar los listeners globales y del DOM
 function setupEventListeners() {
-  // Drag & Drop
+  // --- NAVEGACIÓN POR PESTAÑAS (TABS) ---
+  el.tabFile.addEventListener('click', () => {
+    if (isRecording) {
+      showNotification('Debes detener la grabación activa primero.', 'warning');
+      return;
+    }
+    el.tabFile.classList.add('active');
+    el.tabLive.classList.remove('active');
+    el.contentFile.style.display = 'block';
+    el.contentLive.style.display = 'none';
+    el.stateFileView.style.display = 'block';
+    el.stateLiveView.style.display = 'none';
+    el.outputHeader.innerHTML = '<i class="fa-solid fa-file-invoice"></i> Resultado del Procesamiento';
+  });
+
+  el.tabLive.addEventListener('click', () => {
+    el.tabLive.classList.add('active');
+    el.tabFile.classList.remove('active');
+    el.contentLive.style.display = 'block';
+    el.contentFile.style.display = 'none';
+    el.stateLiveView.style.display = 'flex';
+    el.stateFileView.style.display = 'none';
+    el.outputHeader.innerHTML = '<i class="fa-solid fa-microphone-lines"></i> Monitor de Dictado en Vivo';
+  });
+
+  // --- ARRASTRAR Y SOLTAR ARCHIVOS (DRAG & DROP) ---
   ['dragenter', 'dragover'].forEach(eventName => {
     el.dropZone.addEventListener(eventName, (e) => {
       e.preventDefault();
@@ -110,14 +171,15 @@ function setupEventListeners() {
     clearSelectedFile();
   });
 
-  // Botón para procesar y transcribir
+  // Botones de acción de vista de archivos
   el.transcribeBtn.addEventListener('click', uploadAndConvert);
-
-  // Botón de redescarga
   el.downloadDocxBtn.addEventListener('click', triggerDownload);
-
-  // Botón para nueva transcripción
   el.newTranscribeBtn.addEventListener('click', resetView);
+
+  // --- ELEMENTOS DE GRABACIÓN EN VIVO ---
+  el.recordBtn.addEventListener('click', toggleRecording);
+  el.saveLiveBtn.addEventListener('click', saveLiveSessionToWord);
+  el.clearLiveBtn.addEventListener('click', clearLiveSession);
 }
 
 // Activar/Desactivar traducción en la interfaz
@@ -126,7 +188,7 @@ window.toggleTranslationOption = function() {
   el.targetLanguageSelect.disabled = !isEnabled;
 };
 
-// Procesar el archivo seleccionado
+// Procesar el archivo de audio seleccionado
 function handleAudioFile(file) {
   if (!file.type.startsWith('audio/')) {
     showNotification('Por favor, selecciona un archivo de audio válido.', 'danger');
@@ -143,11 +205,9 @@ function handleAudioFile(file) {
   el.selectedFileName.innerText = file.name;
   el.selectedFileSize.innerText = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
   
-  // Cargar audio en preview y leer duración en segundos
   const fileURL = URL.createObjectURL(file);
   el.audioPreview.src = fileURL;
   
-  // Obtener duración metadatos
   const dummyAudio = new Audio(fileURL);
   dummyAudio.addEventListener('loadedmetadata', () => {
     fileDuration = dummyAudio.duration;
@@ -158,7 +218,7 @@ function handleAudioFile(file) {
   el.audioPreviewContainer.style.display = 'block';
 }
 
-// Limpiar panel de archivo
+// Limpiar panel de archivo seleccionado
 function clearSelectedFile() {
   selectedFile = null;
   fileDuration = 0;
@@ -169,7 +229,7 @@ function clearSelectedFile() {
   el.dropZone.style.display = 'flex';
 }
 
-// Subir y Convertir a Word (Inicia el proceso asíncrono)
+// Subir y Convertir a Word (Inicia el proceso asíncrono en segundo plano)
 async function uploadAndConvert() {
   if (!selectedFile) return;
 
@@ -211,9 +271,9 @@ async function uploadAndConvert() {
   }
 }
 
-// Polling para verificar el estado de la tarea en segundo plano
+// Polling periódico para verificar el estado de la tarea
 async function pollJobStatus(jobId) {
-  const pollInterval = 3000; // Consultar cada 3 segundos
+  const pollInterval = 3000;
   
   const intervalId = setInterval(async () => {
     try {
@@ -234,7 +294,7 @@ async function pollJobStatus(jobId) {
       } else if (data.status === 'translating') {
         showLoader(true, 'Traduciendo texto con OpenAI GPT-4o-mini...');
       } else if (data.status === 'generating_report') {
-        showLoader(true, 'Estructurando y generando archivo Word (.docx)...');
+        showLoader(true, 'Estructurando y maquetando archivo Word (.docx)...');
       } else if (data.status === 'completed') {
         clearInterval(intervalId);
         showLoader(false);
@@ -245,16 +305,13 @@ async function pollJobStatus(jobId) {
         el.docxFileTitle.innerText = downloadedFilename;
         el.detailOrigName.innerText = selectedFile.name;
         
-        // Formatear duración
         const minutes = Math.floor(fileDuration / 60);
         const seconds = Math.round(fileDuration % 60);
         el.detailDuration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')} (${Math.round(fileDuration)}s)`;
         
-        // Mostrar idioma legible
         const langNames = { es: 'Español', en: 'Inglés', fr: 'Francés', de: 'Alemán', it: 'Italiano', pt: 'Portugués' };
         el.detailLang.innerText = langNames[el.languageSelect.value] || el.languageSelect.value;
         
-        // Traducción
         if (el.translateToggle.checked) {
           const targetLang = langNames[el.targetLanguageSelect.value] || el.targetLanguageSelect.value;
           el.detailTranslated.innerText = `Sí (al ${targetLang})`;
@@ -262,11 +319,9 @@ async function pollJobStatus(jobId) {
           el.detailTranslated.innerText = 'No';
         }
 
-        // Mostrar el panel de éxito y descarga
         el.emptyState.style.display = 'none';
         el.successDownloadState.style.display = 'flex';
 
-        // Disparar descarga automática del Word de inmediato
         triggerDownload();
         
         showNotification('¡Transcripción completada! Archivo Word descargado.', 'success');
@@ -274,7 +329,7 @@ async function pollJobStatus(jobId) {
       } else if (data.status === 'failed') {
         clearInterval(intervalId);
         showLoader(false);
-        throw new Error(data.error || 'Ocurrió un error desconocido al procesar el audio en segundo plano.');
+        throw new Error(data.error || 'Ocurrió un error al procesar el audio.');
       }
 
     } catch (error) {
@@ -352,7 +407,351 @@ function showNotification(message, type = 'info') {
   }, 4000);
 }
 
-// Agregar estilos para los toasters
+// --- LÓGICA DE GRABACIÓN Y DICTADO EN TIEMPO REAL (SOCKET.IO & MICROPHONE) ---
+
+// Alternar grabación
+function toggleRecording() {
+  if (isRecording) {
+    stopLiveRecording();
+  } else {
+    startLiveRecording();
+  }
+}
+
+// Iniciar grabación en vivo
+async function startLiveRecording() {
+  try {
+    // 1. Solicitar permisos de micrófono
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true
+      }
+    });
+
+    // 2. Establecer conexión Socket.io
+    socket = io();
+
+    socket.on('connect', () => {
+      console.log('[Socket] Conectado al backend.');
+      // Enviar configuración de idioma
+      socket.emit('set_language', {
+        language: el.languageSelect.value,
+        targetLanguage: el.targetLanguageSelect.value
+      });
+    });
+
+    socket.on('translation_partial', (data) => {
+      updateLiveBubble(data, false);
+    });
+
+    socket.on('translation_final', (data) => {
+      updateLiveBubble(data, true);
+    });
+
+    socket.on('error', (err) => {
+      console.error('[Socket] Error:', err);
+      showNotification(err.message || 'Error en tiempo real.', 'danger');
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[Socket] Desconectado.');
+    });
+
+    // 3. Configurar contexto de Audio a 16000Hz (downsampling automático en el navegador)
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const audioSource = audioContext.createMediaStreamSource(mediaStream);
+    
+    // ScriptProcessorNode para capturar buffers de audio (mono)
+    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+    
+    processorNode.onaudioprocess = (e) => {
+      if (!isRecording) return;
+      const float32Array = e.inputBuffer.getChannelData(0);
+      const pcmBuffer = float32To16BitPCM(float32Array);
+      
+      // Emitir el búfer PCM crudo (16 bits) a través del socket
+      if (socket && socket.connected) {
+        socket.emit('audio_chunk', {
+          audio: pcmBuffer,
+          sampleRate: 16000
+        });
+      }
+    };
+
+    audioSource.connect(processorNode);
+    processorNode.connect(audioContext.destination);
+
+    // 4. Cambiar estados e iniciar animaciones en la UI
+    isRecording = true;
+    el.recordBtn.classList.add('recording');
+    el.recordBtn.title = 'Detener Grabación';
+    el.soundWave.classList.add('active');
+    el.recorderStatus.innerText = 'Grabando y Transcribiendo...';
+    
+    // Ocultar botones de guardado antiguos si existían
+    el.liveActionsGroup.style.display = 'none';
+
+    // Iniciar temporizador
+    startTimer();
+
+    showNotification('Micrófono activo. Comienza a hablar.', 'success');
+
+  } catch (error) {
+    console.error('Error al iniciar grabación en vivo:', error);
+    showNotification('No se pudo acceder al micrófono: ' + error.message, 'danger');
+    stopLiveRecording();
+  }
+}
+
+// Detener grabación en vivo
+function stopLiveRecording() {
+  isRecording = false;
+  
+  // 1. Parar micrófono
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
+
+  // 2. Desconectar nodos de audio
+  if (processorNode) {
+    processorNode.disconnect();
+    processorNode = null;
+  }
+
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+
+  // 3. Desconectar socket.io
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+
+  // 4. Parar temporizador
+  stopTimer();
+
+  // 5. Restablecer UI
+  el.recordBtn.classList.remove('recording');
+  el.recordBtn.title = 'Iniciar Grabación';
+  el.soundWave.classList.remove('active');
+  el.recorderStatus.innerText = 'Grabación Finalizada';
+
+  // Mostrar grupo de acciones si hay transcripción acumulada
+  if (liveTranscriptCompiled) {
+    el.liveActionsGroup.style.display = 'flex';
+  } else {
+    el.recorderStatus.innerText = 'Listo para grabar';
+  }
+
+  showNotification('Grabación detenida.', 'info');
+}
+
+// Iniciar temporizador
+function startTimer() {
+  recordingStartTime = Date.now();
+  elapsedSeconds = 0;
+  el.recorderTimer.innerText = '00:00';
+  
+  timerInterval = setInterval(() => {
+    elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    el.recorderTimer.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, 1000);
+}
+
+// Detener temporizador
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+// Convertir búfer de coma flotante de 32 bits a PCM lineal de 16 bits
+function float32To16BitPCM(float32Array) {
+  const buffer = new ArrayBuffer(float32Array.length * 2);
+  const view = new DataView(buffer);
+  let offset = 0;
+  for (let i = 0; i < float32Array.length; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, float32Array[i]));
+    // Convertir a int16 (rango -32768 a 32767)
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true); // Little Endian
+  }
+  return buffer;
+}
+
+// Renderizar las burbujas de transcripción/traducción en tiempo real en la pantalla
+function updateLiveBubble(data, isFinal) {
+  const { sequenceId, original, translated } = data;
+  if (!sequenceId) return;
+
+  // Quitar el empty state del monitor si sigue presente
+  if (el.liveChatEmpty) {
+    el.liveChatEmpty.remove();
+    el.liveChatEmpty = null;
+  }
+
+  let bubbleData = activeBubbles.get(sequenceId);
+
+  if (!bubbleData) {
+    // 1. Crear burbuja contenedora
+    const msgContainer = document.createElement('div');
+    msgContainer.className = 'chat-message-bubble';
+    
+    // Burbuja de texto original
+    const origDiv = document.createElement('div');
+    origDiv.className = 'original-bubble';
+    origDiv.innerText = original || "...";
+    msgContainer.appendChild(origDiv);
+
+    // Burbuja de traducción
+    let transDiv = null;
+    if (el.translateToggle.checked) {
+      transDiv = document.createElement('div');
+      transDiv.className = 'translated-bubble';
+      transDiv.innerHTML = translated ? translated : '<i class="fa-solid fa-spinner fa-spin"></i> Traduciendo...';
+      msgContainer.appendChild(transDiv);
+    }
+
+    el.liveChatMessages.appendChild(msgContainer);
+    
+    bubbleData = {
+      container: msgContainer,
+      originalText: origDiv,
+      translatedText: transDiv
+    };
+    
+    activeBubbles.set(sequenceId, bubbleData);
+    
+    // Actualizar el contador de oraciones procesadas
+    liveSentenceCount++;
+    el.liveSentenceCount.innerText = `${liveSentenceCount} oraciones`;
+  } else {
+    // 2. Si ya existe la burbuja, actualizar sus textos dinámicamente
+    if (original) {
+      bubbleData.originalText.innerText = original;
+    }
+    if (bubbleData.translatedText) {
+      if (translated) {
+        bubbleData.translatedText.innerText = translated;
+      } else if (isFinal && !translated) {
+        bubbleData.translatedText.innerText = "(Traducción no disponible)";
+      }
+    }
+  }
+
+  // 3. Al finalizar la frase, guardar en el compilado acumulativo y limpiar del Map activo
+  if (isFinal) {
+    if (original) {
+      liveTranscriptCompiled += (liveTranscriptCompiled ? " " : "") + original;
+    }
+    if (translated) {
+      liveTranslationCompiled += (liveTranslationCompiled ? " " : "") + translated;
+    }
+    activeBubbles.delete(sequenceId);
+  }
+
+  // Autoscroll hacia el mensaje más nuevo
+  el.liveChatMessages.scrollTop = el.liveChatMessages.scrollHeight;
+}
+
+// Guardar grabación en vivo y descargar archivo Word (.docx)
+async function saveLiveSessionToWord() {
+  if (!liveTranscriptCompiled) {
+    showNotification('No hay dictado registrado en esta sesión para exportar.', 'warning');
+    return;
+  }
+
+  showLoader(true, 'Generando archivo de Microsoft Word...');
+
+  try {
+    const response = await fetch('/api/generate-docx', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filename: 'Dictado_en_vivo',
+        duration: elapsedSeconds,
+        language: el.languageSelect.value,
+        transcript: liveTranscriptCompiled,
+        translation: el.translateToggle.checked ? liveTranslationCompiled : '',
+        targetLanguage: el.targetLanguageSelect.value
+      })
+    });
+
+    if (!response.ok) {
+      showLoader(false);
+      throw new Error(`Error en el servidor al generar Word: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition');
+    let filename = `transcripcion_dictado_${Date.now()}.docx`;
+    if (disposition && disposition.indexOf('attachment') !== -1) {
+      const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+      const matches = filenameRegex.exec(disposition);
+      if (matches != null && matches[1]) { 
+        filename = matches[1].replace(/['"]/g, '');
+      }
+    }
+
+    // Descargar automáticamente
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+
+    setTimeout(() => {
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }, 100);
+
+    showLoader(false);
+    showNotification('¡Reporte de dictado descargado con éxito!', 'success');
+
+  } catch (error) {
+    showLoader(false);
+    console.error('Error al guardar reporte de dictado:', error);
+    showNotification(error.message, 'danger');
+  }
+}
+
+// Limpiar monitor de grabación en vivo
+function clearLiveSession() {
+  if (isRecording) {
+    stopLiveRecording();
+  }
+  
+  liveTranscriptCompiled = "";
+  liveTranslationCompiled = "";
+  liveSentenceCount = 0;
+  elapsedSeconds = 0;
+  activeBubbles.clear();
+  
+  el.liveSentenceCount.innerText = "0 oraciones";
+  el.recorderTimer.innerText = "00:00";
+  el.recorderStatus.innerText = "Listo para grabar";
+  
+  el.liveChatMessages.innerHTML = `
+    <div class="live-chat-empty" id="live-chat-empty">
+      <i class="fa-solid fa-microphone-lines"></i>
+      <p>Presiona el botón de micrófono a la izquierda y comienza a hablar. El texto aparecerá en tiempo real aquí...</p>
+    </div>
+  `;
+  el.liveChatEmpty = document.getElementById('live-chat-empty');
+  el.liveActionsGroup.style.display = 'none';
+}
+
+// Agregar estilos para toasters globales
 const styleSheet = document.createElement('style');
 styleSheet.innerText = `
   .toast-container {

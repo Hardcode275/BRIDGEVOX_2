@@ -4,7 +4,8 @@ const multer = require('multer');
 const { 
   transcribeFileHandler,
   getJobStatusHandler,
-  downloadJobDocxHandler
+  downloadJobDocxHandler,
+  generateDocxFromTextHandler
 } = require('../controllers/transcriptionController');
 const path = require('path');
 const fs = require('fs');
@@ -32,5 +33,8 @@ router.get('/transcribe/status/:jobId', getJobStatusHandler);
 
 // Ruta para descargar el Word generado de forma directa
 router.get('/transcribe/download/:jobId', downloadJobDocxHandler);
+
+// Ruta para generar Word directamente a partir de texto (dictado en vivo)
+router.post('/generate-docx', generateDocxFromTextHandler);
 
 module.exports = router;
